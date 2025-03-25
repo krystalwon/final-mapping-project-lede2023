@@ -188,14 +188,10 @@ const transformRequest = (url) => {
 var map = new mapboxgl.Map({
     container: 'map',
     style: config.style,
-    zoom: 8.5,
-    maxZoom: 12,
+    zoom: 12.5,
+    maxZoom: 18,
     minZoom: 6.5,
-    center: [-73.949, 40.752],
-    // center: config.chapters[0].location.center,
-    // zoom: config.chapters[0].location.zoom,
-    // bearing: config.chapters[0].location.bearing,
-    // pitch: config.chapters[0].location.pitch,
+    center: [-97.74, 30.28], 
     scrollZoom: false,
     transformRequest: transformRequest
 });
@@ -205,54 +201,94 @@ if (config.showMarkers) {
     marker.setLngLat(config.chapters[0].location.center).addTo(map);
 }
 
+map.on('style.load', function() {
+    // Simplify labels - reduce their density
+    const labelLayers = ['country-label', 'state-label', 'settlement-label', 'poi-label'];
+    labelLayers.forEach(layer => {
+        if (map.getLayer(layer)) {
+            // Increase minimum zoom level for labels to appear
+            const currentLayout = map.getLayoutProperty(layer, 'text-field');
+            map.setLayoutProperty(layer, 'text-field', currentLayout);
+            map.setLayoutProperty(layer, 'symbol-sort-key', ['get', 'area']);
+            
+            // Reduce the visibility of less important labels
+            if (layer !== 'country-label') {
+                map.setLayoutProperty(layer, 'visibility', 'none');
+            }
+        }
+    });
+    
+    // Simplify roads - hide minor roads
+    const roadLayers = ['road-minor-low', 'road-street-low', 'road-path'];
+    roadLayers.forEach(layer => {
+        if (map.getLayer(layer)) {
+            map.setLayoutProperty(layer, 'visibility', 'none');
+        }
+    });
+    
+    // Reduce visual noise by hiding certain features
+    const noisyLayers = ['landuse', 'waterway-label', 'water-point-label', 'natural-point-label'];
+    noisyLayers.forEach(layer => {
+        if (map.getLayer(layer)) {
+            map.setLayoutProperty(layer, 'visibility', 'none');
+        }
+    });
+    
+    // Simplify the background colors for cleaner look
+    if (map.getLayer('background')) {
+        map.setPaintProperty('background', 'background-color', '#f8f8f8');
+    }
+    
+    if (map.getLayer('water')) {
+        map.setPaintProperty('water', 'fill-color', '#e0f0f8');
+    }
+});
+
 // instantiate the scrollama
 var scroller = scrollama();
 
 function handleStepProgress(response) {
-    let stepProgress;
-
-    if (response.element.id.slice(0,5) === 'drive') {
-        let driveSlideNum = parseInt(response.element.id.slice(-2));
-        if (driveSlideNum === 0) {
-            map.setLayoutProperty('animatedLine', 'visibility', 'visible');
-            stepProgress = Math.round(response.progress*driveSmoothness);
-        } else {
-            stepProgress = Math.round(response.progress*driveSmoothness+driveSmoothness*driveSlideNum);
-        }
-        changeCenter(stepProgress);
+    // Only process drive slides
+    if (response.element.id.indexOf('drive-slide') === -1) {
+        // For non-drive slides, we don't animate the route
+        return;
     }
+    
+    let stepProgress;
+    
+    // Extract the slide number from the ID
+    let slideId = response.element.id;
+    let slideNumStr = slideId.replace('drive-slide-', '');
+    let slideNum = parseInt(slideNumStr);
+    
+    // Calculate the proper index range for this drive slide
+    if (slideNum === 0) {
+        // First slide starts at the beginning
+        stepProgress = Math.round(response.progress * driveSmoothness);
+    } else {
+        // Calculate the segment of the entire path that corresponds to this slide
+        let segmentSize = driveTime / driveSlides;
+        let segmentStart = segmentSize * slideNum;
+        stepProgress = Math.round(segmentStart + (response.progress * segmentSize));
+    }
+    
+    // Ensure we don't exceed the coordinate array bounds
+    if (stepProgress >= geojsonPoint.features[0].geometry.coordinates.length) {
+        stepProgress = geojsonPoint.features[0].geometry.coordinates.length - 1;
+    }
+    
+    // Debug
+    console.log(`Slide: ${slideId}, Progress: ${response.progress.toFixed(2)}, Index: ${stepProgress}`);
+    
+    // Update the map center based on the calculated progress
+    changeCenter(stepProgress);
 }
 
+
 map.on("load", function() {
-
-    let w = window.innerWidth;
-    let initBounds = routeData.features[0].geometry.coordinates;
-
-    if (followPoint === false) {
-        var bounds = initBounds.reduce(function(bounds, coord) {
-            return bounds.extend(coord);
-        }, new mapboxgl.LngLatBounds(initBounds[0], initBounds[0]));
-         
-        if (w >= 500) {
-            map.fitBounds(bounds, {
-                padding: {top: 150, bottom: 150, right: -100, left: 200},
-                duration: 0
-            });
-        } else {
-            map.fitBounds(bounds, {
-                padding: 20,
-                duration: 0
-            });
-        }
-    } else {
-        map.setZoom(followZoomLevel);
-        map.setBearing(followBearing);
-        map.setPitch(followPitch);
-    }
-
+    // Setup map sources and layers as you have them
     map.addSource('lineSource', {
         "type": "geojson",
-        // turn off lineMetrics if not doing gradient colors
         lineMetrics: true,
         "data": geojsonPoint
     });
@@ -263,95 +299,160 @@ map.on("load", function() {
     });
 
     map.addLayer({
-      "id": "animatedLine",
-      "type": "line",
-      "source": "lineSource",
-      'paint': {
-        // for static color
-            // 'line-color': 'red',
+        "id": "animatedLine",
+        "type": "line",
+        "source": "lineSource",
+        'paint': {
             'line-opacity': 1,
-            'line-width': 3.5,
+            'line-width': 6,
             'line-gradient': [
             'interpolate',
             ['linear'],
             ['line-progress'],
             0,
-            // '#A9E856',
-            '#D37D1B',
-            // 0.5,
-            // '#58A4B0',
+            '#ffabab', 
             1,
-            // '#373F51'
-            '#152B5F',
-            // '#205962'
+            '#d4a5a5'  
             ]
-
-       },
-       'layout': {
-        //    'visibility': 'none'
-       }
-    });
-
-    map.addLayer({
-      "id": "animatedPoint",
-      "type": "circle",
-      "source": "pointSource",
-      'paint': {
-            'circle-radius': 5,
-            'circle-opacity': 1,
-            'circle-color': '#152B5F'
         },
-      'layout': {
-           // 'visibility': 'none'
-       }
+        'layout': {
+            'visibility': 'visible'
+        }
     });
 
-    // setup the instance, pass callback functions
-    scroller
-    .setup({
-        step: '.step',
-        offset: 0.5,
-        progress: true
-    })
-    .onStepEnter(response => {
-        var chapter = config.chapters.find(chap => chap.id === response.element.id);
-        response.element.classList.add('active');
-        // map.flyTo(chapter.location);
-        if (config.showMarkers) {
-            marker.setLngLat(chapter.location.center);
-        }
-        if (chapter.onChapterEnter.length > 0) {
-            chapter.onChapterEnter.forEach(setLayerOpacity);
-        }
-    })
-    .onStepExit(response => {
-        var chapter = config.chapters.find(chap => chap.id === response.element.id);
-        response.element.classList.remove('active');
-        if (chapter.onChapterExit.length > 0) {
-            chapter.onChapterExit.forEach(setLayerOpacity);
-        }
-    })
-    .onStepProgress(handleStepProgress);
+    // First add an image to your map
+    map.loadImage('charts/images/des.png', (error, image) => {
+        if (error) throw error;
+        map.addImage('pawprint', image);
+        
+        // Then use that image as an icon instead of text
+        map.addLayer({
+            "id": "animatedPoint",
+            "type": "symbol",
+            "source": "pointSource",
+            'layout': {
+            'visibility': 'visible',
+            'icon-image': 'pawprint',
+            'icon-size': 1,
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true
+            }
+        });
+    });
 
-    createLine();
+
+    setupMapClickCoordinates();
+    setTimeout(verifySlideOrder, 2000);
+    
+
+    // Setup scrollama
+
+// setup the instance, pass callback functions
+// Modified scrollama setup to handle regular slides properly
+scroller
+.setup({
+    step: '.step',
+    offset: 0.5,
+    progress: true
+})
+.onStepEnter(response => {
+    var chapter = config.chapters.find(chap => chap.id === response.element.id);
+    response.element.classList.add('active');
+    
+    // Only move the map for non-drive slides
+    // Drive slides are handled by the progress function
+    if (chapter.id.indexOf('drive-slide') === -1 && chapter.location && chapter.location.center) {
+        console.log(`Moving to non-drive slide location: ${chapter.id}`);
+        
+        // Use flyTo for smooth transition
+        map.flyTo({
+            center: chapter.location.center,
+            zoom: chapter.location.zoom || 15,
+            bearing: chapter.location.bearing || 0,
+            pitch: chapter.location.pitch || 60,
+            duration: 1500,
+            essential: true
+        });
+    }
+    
+    if (config.showMarkers) {
+        marker.setLngLat(chapter.location.center);
+    }
+    
+    if (chapter.onChapterEnter && chapter.onChapterEnter.length > 0) {
+        chapter.onChapterEnter.forEach(setLayerOpacity);
+    }
+})
+.onStepExit(response => {
+    var chapter = config.chapters.find(chap => chap.id === response.element.id);
+    response.element.classList.remove('active');
+    
+    if (chapter.onChapterExit && chapter.onChapterExit.length > 0) {
+        chapter.onChapterExit.forEach(setLayerOpacity);
+    }
+})
+.onStepProgress(handleStepProgress);
+
+    // Try different ways to load the GeoJSON file
+    console.log("Attempting to load route data from fridayroute.geojson");
+    
+    $.ajax({
+      url: "./data/fridayroute.geojson",
+      dataType: "json",
+      success: function(data) {
+        console.log('Data loaded successfully:', data);
+        routeData = data;
+        
+        // Check if the data has the expected structure
+        if (!data || !data.features || !data.features[0] || 
+            !data.features[0].geometry || !data.features[0].geometry.coordinates || 
+            !data.features[0].geometry.coordinates.length) {
+          console.error('GeoJSON file has invalid structure:', data);
+          alert('The route data has an invalid structure. Check the console for details.');
+          return;
+        }
+        
+        console.log(`Route has ${data.features[0].geometry.coordinates.length} coordinate points`);
+        
+        // Create the line with the loaded data
+        createLine();
+      },
+      error: function(xhr, status, error) {
+        console.error('Error loading data:', status, error);
+        
+        // Try alternate path
+        console.log("Trying alternate path for fridayroute.geojson");
+        $.ajax({
+          url: "data/fridayroute.geojson", // No leading dot
+          dataType: "json",
+          success: function(data) {
+            console.log('Data loaded successfully from alternate path');
+            routeData = data;
+            createLine();
+          },
+          error: function() {
+            // Try one more path
+            $.ajax({
+              url: "../data/fridayroute.geojson", // Go up one directory
+              dataType: "json",
+              success: function(data) {
+                console.log('Data loaded successfully from parent directory');
+                routeData = data;
+                createLine();
+              },
+              error: function() {
+                alert("Couldn't find fridayroute.geojson. Please check that the file exists and is in the correct location.");
+              }
+            });
+          }
+        });
+      }
+    });
 });
 
 // setup resize event
 window.addEventListener('resize', scroller.resize);
 
-$(document).ready(function (){
-    $.ajax({
-      url:"./data/fridayroute.geojson",
-      dataType: "json",
-      success: function (data) {
-        console.log('data', data.features[0]);
-        routeData = data;
-      },
-      error: function () {
-        console.log('error loading data');
-      }
-    });
-});
 
 </script>
 
